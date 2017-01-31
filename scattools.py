@@ -68,16 +68,12 @@ class _Scatterometer(object):
         return np.ma.masked_where(np.logical_or(up > 1000, up < -1000), up), \
             np.ma.masked_where(np.logical_or(vp > 1000, vp < -1000), vp)
 
-    def _calc_div_finite_diff(self, u, v, lat, lon, smooth=1, res=12500.0,
-                              after=True):
+    def _calc_div_finite_diff(self, u, v, lat, lon, smooth=1, res=12500.0):
         au, av = self._get_uprime_vprime(u, v, lat, lon)
         dxx = np.zeros((au.shape[0], au.shape[1]))
         dyy = np.zeros((av.shape[0], av.shape[1]))
         divg = np.zeros((au.shape[0], au.shape[1]))
-        if not after:  # Smooth velocities before derivatives
-            matrix = self._get_matrix(smooth)
-        else:
-            matrix = self._get_matrix(1)
+        matrix = self._get_matrix(smooth)
         smu = convolve2d(au, matrix, mode='same', boundary='symm',
                          fillvalue=-999.0)
         smv = convolve2d(av, matrix, mode='same', boundary='symm',
@@ -88,12 +84,6 @@ class _Scatterometer(object):
         dqv_dx, dqv_dy = np.gradient(smv[:, :], dxx, dyy)
         divg = dqu_dx + dqv_dy
         divg = np.ma.masked_where(np.logical_or(au.mask, av.mask), divg)
-        if after:  # Smooth divergence after derivatives
-            matrix = self._get_matrix(smooth)
-            smd = convolve2d(divg, matrix, mode='same',
-                             boundary='symm', fillvalue=0)
-            divg = np.ma.masked_where(divg.mask, smd)
-            print('debug in the after conditional')
         divg.mask = np.logical_or(np.logical_or(
             divg > 1e-2, divg < -1e-2), divg.mask)
         return divg
@@ -201,13 +191,12 @@ class RapidScat(_Scatterometer):
                 RAPIDSCAT_INIT_DT + dt.timedelta(seconds=t))
         self.data['datetime'] = np.array(self.data['datetime'])
 
-    def calc_divergence(self, smooth=1, res=12500.0, finite_diff=True,
-                        after=True):
+    def calc_divergence(self, smooth=1, res=12500.0, finite_diff=True):
         if finite_diff:
             divg = self._calc_div_finite_diff(
                 self.data['u'], self.data['v'],
                 self.data['latitude'], self.data['longitude'],
-                smooth=smooth, res=res, after=after)
+                smooth=smooth, res=res)
             self.data['div'] = divg
         else:
             print('Other divergence methods not yet supported,',
