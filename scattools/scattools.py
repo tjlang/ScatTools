@@ -1,12 +1,12 @@
 from __future__ import print_function, division
 import numpy as np
-import matplotlib.pyplot as plt
 import datetime as dt
-from mpl_toolkits.basemap import Basemap
 from pydap.client import open_url
 from netCDF4 import Dataset
-from great_circle_tools import gc_bear
+from .great_circle_tools import gc_bear, gc_dist
 from scipy.signal import convolve2d
+from .old_gradient import gradient
+from .uhr_tools import select_amb
 
 RAPIDSCAT_INIT_DT = dt.datetime(1999, 1, 1)
 ASCAT_INIT_DT = dt.datetime(1990, 1, 1)
@@ -45,7 +45,7 @@ class _Scatterometer(object):
             for j in range(len(lat1)):
                 if j > 0:
                     if lat1[j] >= -90 and lat1[j] <= 90 and \
-                            lon1[j] >= 0 and lon1[j] <= 360:
+                            lon1[j] >= -360 and lon1[j] <= 360:
                         bear.append(gc_bear(lat1[0], lon1[0],
                                             lat1[j], lon1[j]))
             # May fail if no good lat/lon
@@ -68,29 +68,58 @@ class _Scatterometer(object):
         return np.ma.masked_where(np.logical_or(up > 1000, up < -1000), up), \
             np.ma.masked_where(np.logical_or(vp > 1000, vp < -1000), vp)
 
-    def _calc_div_finite_diff(self, u, v, lat, lon, smooth=1, res=12500.0):
+    def _calc_div_finite_diff(self, u, v, lat, lon, smooth=1, res=12500.0,
+                              variable_res=False):
         au, av = self._get_uprime_vprime(u, v, lat, lon)
         dxx = np.zeros((au.shape[0], au.shape[1]))
         dyy = np.zeros((av.shape[0], av.shape[1]))
         divg = np.zeros((au.shape[0], au.shape[1]))
-        matrix = self._get_matrix(smooth)
-        smu = convolve2d(au, matrix, mode='same', boundary='symm',
-                         fillvalue=-999.0)
-        smv = convolve2d(av, matrix, mode='same', boundary='symm',
-                         fillvalue=-999.0)
-        dxx[:] = res
-        dyy[:] = res
-        dqu_dx, dqu_dy = np.gradient(smu[:, :], dxx, dyy)
-        dqv_dx, dqv_dy = np.gradient(smv[:, :], dxx, dyy)
+        if smooth is not None:
+            matrix = self._get_matrix(smooth)
+            smu = convolve2d(au, matrix, mode='same', boundary='symm',
+                             fillvalue=-999.0)
+            smv = convolve2d(av, matrix, mode='same', boundary='symm',
+                             fillvalue=-999.0)
+        else:
+            smu = 1.0 * au
+            smv = 1.0 * av
+        if variable_res:
+            dxx, dyy = self._get_dx_dy_from_lat_lon(lat, lon)
+        else:
+            dxx[:] = res
+            dyy[:] = res
+        dqu_dy, dqu_dx = gradient(smu[:, :], dyy, dxx)
+        dqv_dy, dqv_dx = gradient(smv[:, :], dyy, dxx)
         divg = dqu_dx + dqv_dy
         divg = np.ma.masked_where(np.logical_or(au.mask, av.mask), divg)
         divg.mask = np.logical_or(np.logical_or(
-            divg > 1e-2, divg < -1e-2), divg.mask)
-        return divg
+            divg > 1, divg < -1), divg.mask)
+        windgrad = np.sqrt((dqu_dx + dqv_dx)**2 + (dqu_dy + dqv_dy)**2)
+        windgrad = np.ma.masked_where(
+            np.logical_or(au.mask, av.mask), windgrad)
+        windgrad.mask = np.logical_or(np.logical_or(
+            windgrad > 1, windgrad < -1), windgrad.mask)
+        return divg, windgrad
 
     def _get_matrix(self, smooth):
         x = smooth
         return np.ones((x, x), dtype='float') / x**2
+
+    def _get_dx_dy_from_lat_lon(self, lat, lon):
+        shp = np.shape(lat)
+        dy = np.zeros_like(lat)
+        dx = 0.0 * dy
+        for j in range(shp[0]-1):
+            for i in range(shp[1]-1):
+                dy[j, i] = gc_dist(lat[j, i], lon[j, i],
+                                   lat[j+1, i], lon[j+1, i])
+                dx[j, i] = gc_dist(lat[j, i], lon[j, i],
+                                   lat[j, i+1], lon[j, i+1])
+        dy[-1, :] = dy[-2, :]
+        dx[-1, :] = dx[-2, :]
+        dy[:, -1] = dy[:, -2]
+        dx[:, -1] = dx[:, -2]
+        return 1000.0 * dx, 1000.0 * dy
 
 
 class Ascat(_Scatterometer):
@@ -146,11 +175,12 @@ class Ascat(_Scatterometer):
     def calc_divergence(self, smooth=1, res=12500.0, finite_diff=True):
         for key in ['left', 'right']:
             if finite_diff:
-                divg = self._calc_div_finite_diff(
+                divg, windgrad = self._calc_div_finite_diff(
                     self.data[key]['u'], self.data[key]['v'],
                     self.data[key]['latitude'], self.data[key]['longitude'],
                     smooth=smooth, res=res)
                 self.data[key]['div'] = divg
+                self.data[key]['grad'] = windgrad
 
 
 class RapidScat(_Scatterometer):
@@ -193,11 +223,44 @@ class RapidScat(_Scatterometer):
 
     def calc_divergence(self, smooth=1, res=12500.0, finite_diff=True):
         if finite_diff:
-            divg = self._calc_div_finite_diff(
+            divg, windgrad = self._calc_div_finite_diff(
                 self.data['u'], self.data['v'],
                 self.data['latitude'], self.data['longitude'],
                 smooth=smooth, res=res)
             self.data['div'] = divg
+            self.data['grad'] = windgrad
+        else:
+            print('Other divergence methods not yet supported,',
+                  'use finite_diff=True for now')
+
+
+class UHR(_Scatterometer):
+
+    def __init__(self, url):
+        _Scatterometer.__init__(self, url, pydap=False)
+        self.populate_attributes()
+        self.url.close()
+
+    def populate_attributes(self):
+        self.data = {}
+        self.data['longitude'] = np.array(self.url['lon'])
+        self.data['latitude'] = np.array(self.url['lat'])
+        asel = np.array(self.url['ambiguity_select'])
+        ws = select_amb(np.array(self.url['wspeeds']), asel)
+        wd = select_amb(np.array(self.url['wdirs']), asel)
+        self.data['wind_speed'] = ws
+        self.data['wind_dir'] = wd
+        self.data['u'], self.data['v'] = self._compute_uv(
+            self.data['wind_speed'], self.data['wind_dir'])
+
+    def calc_divergence(self, smooth=None, res=12500.0, finite_diff=True):
+        if finite_diff:
+            divg, windgrad = self._calc_div_finite_diff(
+                self.data['u'], self.data['v'],
+                self.data['latitude'], self.data['longitude'],
+                smooth=smooth, res=res, variable_res=True)
+            self.data['div'] = divg
+            self.data['grad'] = windgrad
         else:
             print('Other divergence methods not yet supported,',
                   'use finite_diff=True for now')
