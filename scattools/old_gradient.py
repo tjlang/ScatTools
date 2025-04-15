@@ -66,20 +66,20 @@ def gradient(f, *varargs, **kwargs):
 
     axes = kwargs.pop('axis', None)
     if axes is None:
-        axes = tuple(range(N))
+        axes = np.array(range(N))
     # check axes to have correct type and no duplicate entries
     if isinstance(axes, int):
         axes = (axes,)
-    if not isinstance(axes, tuple):
-        raise TypeError("A tuple of integers or a single integer is required")
+#    if not isinstance(axes, tuple):
+#        raise TypeError("A tuple of integers or a single integer is required")
 
     # normalize axis values:
     axes = tuple(x + N if x < 0 else x for x in axes)
-    if max(axes) >= N or min(axes) < 0:
-        raise ValueError("'axis' entry is out of bounds")
+#     if max(axes) >= N or min(axes) < 0:
+#         raise ValueError("'axis' entry is out of bounds")
 
-    if len(set(axes)) != len(axes):
-        raise ValueError("duplicate value in 'axis'")
+#     if len(set(axes)) != len(axes):
+#        raise ValueError("duplicate value in 'axis'")
 
     n = len(varargs)
     if n == 0:
@@ -146,19 +146,20 @@ def gradient(f, *varargs, **kwargs):
             slice2[axis] = slice(2, None)
             slice3[axis] = slice(None, -2)
             # 1D equivalent -- out[1:-1] = (y[2:] - y[:-2])/2.0
-            out[slice1] = (y[slice2] - y[slice3])/2.0
+            # print('debug 3', slice2, type(slice2), np.shape(slice2))
+            out[tuple(slice1)] = (y[tuple(slice2)] - y[tuple(slice3)])/2.0
 
             slice1[axis] = 0
             slice2[axis] = 1
             slice3[axis] = 0
             # 1D equivalent -- out[0] = (y[1] - y[0])
-            out[slice1] = (y[slice2] - y[slice3])
+            out[tuple(slice1)] = (y[tuple(slice2)] - y[tuple(slice3)])
 
             slice1[axis] = -1
             slice2[axis] = -1
             slice3[axis] = -2
             # 1D equivalent -- out[-1] = (y[-1] - y[-2])
-            out[slice1] = (y[slice2] - y[slice3])
+            out[tuple(slice1)] = (y[tuple(slice2)] - y[tuple(slice3)])
 
         # Numerical differentiation: 2st order edges, 2nd order interior
         else:

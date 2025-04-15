@@ -1,7 +1,7 @@
 from __future__ import print_function, division
 import numpy as np
 import datetime as dt
-from pydap.client import open_url
+# from pydap.client import open_url
 from netCDF4 import Dataset
 from .great_circle_tools import gc_bear, gc_dist
 from scipy.signal import convolve2d
@@ -80,6 +80,7 @@ class _Scatterometer(object):
                              fillvalue=-999.0)
             smv = convolve2d(av, matrix, mode='same', boundary='symm',
                              fillvalue=-999.0)
+            # print('debug 1', type(smu), np.shape(smu))
         else:
             smu = 1.0 * au
             smv = 1.0 * av
@@ -88,6 +89,7 @@ class _Scatterometer(object):
         else:
             dxx[:] = res
             dyy[:] = res
+        # print('debug 2', np.shape(dyy), np.shape(dxx))
         dqu_dy, dqu_dx = gradient(smu[:, :], dyy, dxx)
         dqv_dy, dqv_dx = gradient(smv[:, :], dyy, dxx)
         divg = dqu_dx + dqv_dy
